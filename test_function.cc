@@ -66,7 +66,8 @@ void test_function_compress(int argc, char** argv) {
   Function1D f(world, func1, k, thresh, 30, initiallevel);
   printf("f : \n");
   f.print_tree();
-  Function1D g = reconstruct(world, compress(world, f));
+  //Function1D g = reconstruct(world, compress(world, f));
+  Function1D g = compress(world, f);
   printf("\ng : \n");
   g.print_tree();
   finalize();
@@ -104,9 +105,9 @@ void test_function_point(int argc, char** argv) {
 
 
 int main(int argc, char** argv) {
-  // test_function_point(argc,argv);
-  // test_function_compress(argc,argv);
+  //test_function_point(argc,argv);
+  test_function_compress(argc,argv);
   // test_function_add(argc,argv);
-  test_function_mul(argc,argv);
+  //test_function_mul(argc,argv);
   return 0;
 }
