@@ -2,7 +2,7 @@
 #include "function1d.h"
 
 const double PI = 3.141592653589793238462643383279502884197169399375105820974944592307816406286208998628034825;
-const int k = 8;
+const int k = 4;
 const double thresh = 1e-4;
 const int initiallevel = 1;
 
@@ -66,8 +66,7 @@ void test_function_compress(int argc, char** argv) {
   Function1D f(world, func1, k, thresh, 30, initiallevel);
   printf("f : \n");
   f.print_tree();
-  //Function1D g = reconstruct(world, compress(world, f));
-  Function1D g = compress(world, f);
+  Function1D g = reconstruct(world, compress(world, f));
   printf("\ng : \n");
   g.print_tree();
   finalize();
