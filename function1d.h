@@ -6,24 +6,47 @@
 
 using namespace madness;
 
-Tensor<double> zeros(int s0) {
-  Tensor<double> r(s0*1L);
+using tensor_real = Tensor<double>;
+
+tensor_real zeros(int s0) {
+  tensor_real r(s0*1L);
   return r;
 }
 
-Tensor<double> zeros(int s0, int s1) {
-  Tensor<double> r(s0*1L, s1*1L);
+tensor_real zeros(int s0, int s1) {
+  tensor_real r(s0*1L, s1*1L);
   return r;
 }
 
-double normf(Tensor<double> t) {
+double normf(tensor_real t) {
   return t.normf();
 }
 
-double wst_inner(const Tensor<double>& t1, const Tensor<double>& t2) {
+double wst_inner(const tensor_real& t1, const tensor_real& t2) {
   double rval = 0.0;
   for (auto i = 0; i < t1.size(); i++) rval += t1[i]*t2[i];
   return rval;
+}
+
+// Add utility functor for reduction operation
+template <typename T>
+struct Add {
+    T operator()(const T& a, const T& b) const {return a+b;};
+};
+
+
+// And utility functor for reduction operation
+template <typename T>
+struct And {
+    T operator()(const T& a, const T&b) const {return a && b;};
+};
+
+
+// Used to sum a value up the tree
+template <typename T, typename opT>
+T reduction_tree(const T& left, const T& right) {
+    opT op;
+    return op(left,right);
 }
 
 struct Key {
@@ -58,13 +81,13 @@ struct Key {
 
 struct Node {
   Key key;
-  Tensor<double> coeffs;
+  tensor_real coeffs;
   bool has_children;
   // Node() : key(), coeffs(), has_children(false) {}
-  // Node(const Key& key, const Tensor<double>& coeffs, bool has_children) 
+  // Node(const Key& key, const tensor_real& coeffs, bool has_children) 
   //  : key(key), coeffs(coeffs), has_children(has_children) {}
   Node() : key(), coeffs() {}
-  Node(const Key& key, const Tensor<double>& coeffs) 
+  Node(const Key& key, const tensor_real& coeffs) 
    : key(key), coeffs(coeffs) {}
 
   bool operator ==(const Node& a) const {
@@ -87,7 +110,7 @@ double normf(const Node& node) {
 using CoeffTree = WorldContainer<Key,Node>;
 
 inline 
-void pack(int k, const Tensor<double>& s0, const Tensor<double>& s1, Tensor<double>& s) {
+void pack(int k, const tensor_real& s0, const tensor_real& s1, tensor_real& s) {
   assert(s0.size() == k);
   assert(s1.size() == k);
   assert(s.size() == 2*k);
@@ -98,7 +121,7 @@ void pack(int k, const Tensor<double>& s0, const Tensor<double>& s1, Tensor<doub
 }
 
 inline
-void unpack(int k, const Tensor<double>& s, Tensor<double>& s0, Tensor<double>& s1) {
+void unpack(int k, const tensor_real& s, tensor_real& s0, tensor_real& s1) {
   assert(s0.size() == k);
   assert(s1.size() == k);
   assert(s.size() == 2*k);
@@ -108,7 +131,7 @@ void unpack(int k, const Tensor<double>& s, Tensor<double>& s0, Tensor<double>& 
   }
 }
 
-class Function1D {
+class Function1D : public WorldObject< Function1D> {
 private:
   enum class FunctionForm {RECONSTRUCTED, COMPRESSED, UNDEFINED};
 
@@ -121,20 +144,21 @@ private:
   int initiallevel = 4;
   CoeffTree stree;
   CoeffTree dtree;
-  Tensor<double> quad_x;
-  Tensor<double> quad_w;
+  tensor_real quad_x;
+  tensor_real quad_w;
   int quad_npts;
-  Tensor<double> hg;
-  Tensor<double> hgT;
-  Tensor<double> quad_phi;
-  Tensor<double> quad_phiT;
-  Tensor<double> quad_phiw;
-  Tensor<double> quad_phiwT;
-  Tensor<double> r0;
-  Tensor<double> rp;
-  Tensor<double> rm;
+  tensor_real hg;
+  tensor_real hgT;
+  tensor_real quad_phi;
+  tensor_real quad_phiT;
+  tensor_real quad_phiw;
+  tensor_real quad_phiwT;
+  tensor_real r0;
+  tensor_real rp;
+  tensor_real rm;
 
 public:
+  typedef WorldObject<Function1D> woT;
   // I know that friends are evil, but I decided to have them anyway
   friend Function1D operator*(const double& s, const Function1D& f);
   friend Function1D operator*(const Function1D& f, const double& s);
@@ -143,17 +167,18 @@ public:
   friend Function1D norm2(const Function1D& f); 
 
   Function1D(World& world, int k, double thresh, int maxlevel = 30, int initiallevel = 4) 
-   : world(world), k(k), thresh(thresh), maxlevel(maxlevel), initiallevel(initiallevel) {
+   : WorldObject<Function1D>(world), world(world), k(k), thresh(thresh), maxlevel(maxlevel), initiallevel(initiallevel) {
     form = FunctionForm::UNDEFINED;
     stree = CoeffTree(world);
     dtree = CoeffTree(world);
     init_twoscale(k);
     init_quadrature(k);
     make_dc_periodic(k);
+    // to do: process_pending (??)
   }
 
   Function1D(World& world, double (*f) (double), int k, double thresh, int maxlevel = 30, int initiallevel = 4) 
-   : world(world), k(k), thresh(thresh), maxlevel(maxlevel), initiallevel(initiallevel) {
+   : WorldObject<Function1D>(world), world(world), k(k), thresh(thresh), maxlevel(maxlevel), initiallevel(initiallevel) {
     form = FunctionForm::RECONSTRUCTED;
     stree = CoeffTree(world);
     dtree = CoeffTree(world);
@@ -161,13 +186,20 @@ public:
     init_quadrature(k);
     make_dc_periodic(k);
     int ntrans = std::pow(2, initiallevel);
-    for (auto l = 0; l < ntrans; l++) refine(f, Key(initiallevel, l));
+    auto v = future_vector_factory<bool>(ntrans);
+    for (auto l = 0; l < ntrans; l++) {
+      Key key(initiallevel, l);
+      v[l] = woT::task(stree.owner(key), &Function1D::do_refine, f, key);
+    }
     for (auto n = 0; n <= initiallevel; n++) {
       ntrans = std::pow(2,n);
       for (auto l = 0; l < ntrans; l++) {
-        stree.replace(Key(n,l), Node(Key(n,l), Tensor<double>()));
+        stree.replace(Key(n,l), Node(Key(n,l), tensor_real()));
       }
     }
+    bool bfinished = true;
+    for (auto l = 0; l < ntrans; l++) bfinished = bfinished && v[l];
+    // to do: process_pending (??)
   }
 
   ~Function1D() {}
@@ -200,7 +232,7 @@ public:
     quad_phiwT = transpose(quad_phiw); 
   }
 
-  Tensor<double> project_box(double (*f)(double), const Key& key) {
+  tensor_real project_box(double (*f)(double), const Key& key) {
     auto n = key.n;
     auto l = key.l;
     auto s = zeros(k);
@@ -216,6 +248,27 @@ public:
     return s;
   }
 
+  Future<bool> do_refine(double (*f)(double), const Key& key) {
+    const auto keyl = key.left_child(); 
+    const auto keyr = key.right_child(); 
+    auto sl = project_box(f, keyl);
+    auto sr = project_box(f, keyr);
+    auto s = zeros(2*k);
+    pack(k, sl, sr, s);
+    auto d = inner(hg,s);
+    stree.replace(key, Node(key, tensor_real()));
+    if ((d(Slice(k,2*k-1))).normf() < thresh || key.n >= maxlevel-1) {
+      stree.replace(keyl, Node(keyl, sl));
+      stree.replace(keyr, Node(keyr, sr));
+      return Future<bool>(true);
+    } else {
+      Future<bool> left = woT::task(stree.owner(key.left_child()), &Function1D::do_refine, f, key.left_child());
+      Future<bool> right = woT::task(stree.owner(key.right_child()), &Function1D::do_refine, f, key.right_child());
+      return world.taskq.add(reduction_tree<bool,And<bool> >, left, right);
+    }
+    return Future<bool>(true);
+  }
+
   void refine(double (*f)(double), const Key& key) {
     const auto keyl = key.left_child(); 
     const auto keyr = key.right_child(); 
@@ -224,7 +277,7 @@ public:
     auto s = zeros(2*k);
     pack(k, sl, sr, s);
     auto d = inner(hg,s);
-    stree.replace(key, Node(key, Tensor<double>()));
+    stree.replace(key, Node(key, tensor_real()));
     if ((d(Slice(k,2*k-1))).normf() < thresh || key.n >= maxlevel-1) {
       stree.replace(keyl, Node(keyl, sl));
       stree.replace(keyr, Node(keyr, sr));
@@ -297,11 +350,34 @@ public:
     return r;
   }
 
-  Tensor<double> compress_spawn(CoeffTree& dtree_r, int n, int l) const {
+  Future<tensor_real> do_compress(CoeffTree& dtree_r, const Key& key) {
+    auto keyl = key.left_child();
+    auto keyr = key.right_child();
+    auto s0p = stree.find(keyl).get();
+    auto s1p = stree.find(keyr).get();
+    tensor_real s0;
+    tensor_real s1;
+
+    MADNESS_ASSERT(s0p != stree.end());
+    MADNESS_ASSERT(s1p != stree.end());
+    auto s0f = ((s0p->second.coeffs).size() == 0) ? 
+      woT::task(dtree_r.owner(keyl), &Function1D::do_compress, dtree_r, keyl) : Future<tensor_real>(s0p->second.coeffs);
+    auto s1f = ((s1p->second.coeffs).size() == 0) ? 
+      woT::task(dtree_r.owner(keyr), &Function1D::do_compress, dtree_r, keyr) : Future<tensor_real>(s1p->second.coeffs);
+    tensor_real s(k*2L);
+    pack(k, s0f.get(), s1f.get(), s);
+    tensor_real d = inner(hg,s);
+    auto sr = d(Slice(0,k-1));
+    auto dr = d(Slice(k,2*k-1));
+    dtree_r.replace(key, Node(key, dr));
+    return Future<tensor_real>(sr);
+  }
+
+  tensor_real compress_spawn(CoeffTree& dtree_r, int n, int l) const {
     auto s0p = stree.find(Key(n+1,2*l)).get();
     auto s1p = stree.find(Key(n+1,2*l+1)).get();
-    Tensor<double> s0;
-    Tensor<double> s1;
+    tensor_real s0;
+    tensor_real s1;
     if (s0p != stree.end()) {
       s0 = ((s0p->second.coeffs).size() == 0) ? compress_spawn(dtree_r, n+1, 2*l) : s0p->second.coeffs;
     } else {
@@ -312,9 +388,9 @@ public:
     } else {
       s1 = compress_spawn(dtree_r, n+1, 2*l+1);
     }
-    Tensor<double> s(k*2L);
+    tensor_real s(k*2L);
     pack(k, s0, s1, s);
-    Tensor<double> d = inner(hg,s);
+    tensor_real d = inner(hg,s);
     auto sr = d(Slice(0,k-1));
     auto dr = d(Slice(k,2*k-1));
     auto key = Key(n,l);
@@ -322,29 +398,29 @@ public:
     return sr;
   }
 
-  void reconstruct_spawn(CoeffTree& stree_r, const Tensor<double>& ss, int n, int l) const {
+  void reconstruct_spawn(CoeffTree& stree_r, const tensor_real& ss, int n, int l) const {
     auto dp = dtree.find(Key(n,l)).get();
     if (dp != dtree.end()) {
-      Tensor<double> dd = dp->second.coeffs;
-      Tensor<double> d(k*2L);
+      tensor_real dd = dp->second.coeffs;
+      tensor_real d(k*2L);
       pack(k, ss, dd, d);
       auto s = inner(hgT,d);
-      Tensor<double> s0(k);
-      Tensor<double> s1(k);
+      tensor_real s0(k);
+      tensor_real s1(k);
       for (auto i = 0; i < k; i++) {
         s0[i] = s[i];
         s1[i] = s[i+k];
       }
       reconstruct_spawn(stree_r, s0, n+1, 2*l);
       reconstruct_spawn(stree_r, s1, n+1, 2*l+1);
-      stree_r.replace(Key(n,l),Node(Key(n,l), Tensor<double>()));
+      stree_r.replace(Key(n,l),Node(Key(n,l), tensor_real()));
     } else {
       stree_r.replace(Key(n,l),Node(Key(n,l), ss));
     }
   }
 
   void mul_helper(CoeffTree& r, const CoeffTree& f, const CoeffTree& g, 
-                  const Tensor<double>& fsin, const Tensor<double>& gsin, int n, int l) {
+                  const tensor_real& fsin, const tensor_real& gsin, int n, int l) {
     auto mrefine = true;
     auto fs = fsin;
     if (fs.size() == 0) {
@@ -361,14 +437,14 @@ public:
     if (fs.size() && gs.size()) {
       if (mrefine) {
         // refine to lower level for both f and g 
-        Tensor<double> fd(k*2L);
-        Tensor<double> gd(k*2L);
+        tensor_real fd(k*2L);
+        tensor_real gd(k*2L);
         // pack the coeffs together so that we can do two scale
-        pack(k, fs, Tensor<double>(k*1L), fd);
-        pack(k, gs, Tensor<double>(k*1L), gd);
+        pack(k, fs, tensor_real(k*1L), fd);
+        pack(k, gs, tensor_real(k*1L), gd);
         auto fss = inner(hgT,fd); auto gss = inner(hgT,gd); 
-        Tensor<double> fs0(k*1L); Tensor<double> fs1(k*1L);
-        Tensor<double> gs0(k*1L); Tensor<double> gs1(k*1L);
+        tensor_real fs0(k*1L); tensor_real fs1(k*1L);
+        tensor_real gs0(k*1L); tensor_real gs1(k*1L);
         // unpack the coeffs on n+1 level
         unpack(k, fss, fs0, fs1);
         unpack(k, gss, gs0, gs1);
@@ -384,14 +460,14 @@ public:
         rs1 = inner(quad_phiwT, rs1);
         rs0 = rs0.scale(scale);
         rs1 = rs1.scale(scale);
-        r.replace(Key(n,l),Node(Key(n,l),Tensor<double>()));
+        r.replace(Key(n,l),Node(Key(n,l),tensor_real()));
         r.replace(Key(n+1,2*l),Node(Key(n+1,2*l),rs0));
         r.replace(Key(n+1,2*l+1),Node(Key(n+1,2*l+1),rs1));
       } else {
         // do multiply --- DOESN'T WORK!!! (me dumb)
       }
     } else {
-      r.replace(Key(n,l),Node(Key(n,l),Tensor<double>()));
+      r.replace(Key(n,l),Node(Key(n,l),tensor_real()));
       mul_helper(r, f, g, fs, gs, n+1, 2*l);
       mul_helper(r, f, g, fs, gs, n+1, 2*l+1);
     }
@@ -401,7 +477,7 @@ public:
     Function1D r(world, g.k, g.thresh, g.maxlevel, g.initiallevel);
     assert(is_reconstructed());
     assert(g.is_reconstructed());
-    r.mul_helper(r.stree, stree, g.stree, Tensor<double>(), Tensor<double>(), 0, 0); 
+    r.mul_helper(r.stree, stree, g.stree, tensor_real(), tensor_real(), 0, 0); 
     r.form = Function1D::FunctionForm::RECONSTRUCTED;
     return r;
   }
@@ -471,8 +547,9 @@ public:
 
 Function1D compress(World& world, const Function1D& f) {
   Function1D r(world, f.k, f.thresh, f.maxlevel, f.initiallevel);
-  auto s0 = f.compress_spawn(r.dtree, 0, 0);
-  r.stree.replace(Key(0,0), Node(Key(0,0), s0));
+  Key root = Key(0,0);
+  auto s0f = f.task(r.dtree.owner(root), &Function1D::do_compress, r.dtree, root);
+  r.stree.replace(root, Node(root, s0f.get()));
   r.form = Function1D::FunctionForm::COMPRESSED;
   return r;
 }

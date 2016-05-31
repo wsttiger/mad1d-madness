@@ -105,8 +105,8 @@ void test_function_point(int argc, char** argv) {
 
 int main(int argc, char** argv) {
   // test_function_point(argc,argv);
-  // test_function_compress(argc,argv);
+  test_function_compress(argc,argv);
   // test_function_add(argc,argv);
-  test_function_mul(argc,argv);
+  // test_function_mul(argc,argv);
   return 0;
 }
