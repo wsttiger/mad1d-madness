@@ -398,6 +398,31 @@ public:
     return sr;
   }
 
+  Future<bool> do_reconstruct(CoeffTree& stree_r, const tensor_real& ss, const Key& key) const {
+    auto keyl = key.left_child();
+    auto keyr = key.right_child();
+    auto dp = dtree.find(key).get();
+    if (dp != dtree.end()) {
+      tensor_real dd = dp->second.coeffs;
+      tensor_real d(k*2L);
+      pack(k, ss, dd, d);
+      auto s = inner(hgT,d);
+      tensor_real s0(k);
+      tensor_real s1(k);
+      for (auto i = 0; i < k; i++) {
+        s0[i] = s[i];
+        s1[i] = s[i+k];
+      }
+      auto f_left = woT::task(stree_r.owner(keyl), &Function1D::do_reconstruct, stree_r, s0, keyl);
+      auto f_right = woT::task(stree_r.owner(keyr), &Function1D::do_reconstruct, stree_r, s1, keyr);
+      stree_r.replace(key,Node(key, tensor_real()));
+      return world.taskq.add(reduction_tree<bool,And<bool> >, f_left, f_right);
+    } else {
+      stree_r.replace(key,Node(key, ss));
+      return Future<bool>(true);
+    }
+  }
+
   void reconstruct_spawn(CoeffTree& stree_r, const tensor_real& ss, int n, int l) const {
     auto dp = dtree.find(Key(n,l)).get();
     if (dp != dtree.end()) {
@@ -556,8 +581,9 @@ Function1D compress(World& world, const Function1D& f) {
 
 Function1D reconstruct(World& world, const Function1D& f) {
   Function1D r(world, f.k, f.thresh, f.maxlevel, f.initiallevel);
-  const auto s0 = (f.stree.find(Key(0,0)).get())->second.coeffs;
-  f.reconstruct_spawn(r.stree, s0, 0, 0);
+  Key root = Key(0,0);
+  const auto s0 = (f.stree.find(root).get())->second.coeffs;
+  auto done = f.task(r.stree.owner(root), &Function1D::do_reconstruct, r.stree, s0, root).get();
   r.form = Function1D::FunctionForm::RECONSTRUCTED;
   return r;
 }
