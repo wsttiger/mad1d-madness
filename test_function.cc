@@ -82,7 +82,7 @@ void test_function_mul(int argc, char** argv) {
   printf("\nfunction gr:\n");
   gr.print_tree();
   auto fgr = fr * gr;
-  printf("\nfunction f+g(r):\n");
+  printf("\nfunction f*g(r):\n");
   fgr.print_tree();
   auto f12r = Function1D(world, mul_f12, k, thresh, 30, initiallevel+1);
   printf("\nfunction f12r:\n");
@@ -105,8 +105,8 @@ void test_function_point(int argc, char** argv) {
 
 int main(int argc, char** argv) {
   // test_function_point(argc,argv);
-  test_function_compress(argc,argv);
+  // test_function_compress(argc,argv);
   // test_function_add(argc,argv);
-  // test_function_mul(argc,argv);
+  test_function_mul(argc,argv);
   return 0;
 }

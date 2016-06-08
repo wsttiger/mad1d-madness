@@ -444,18 +444,20 @@ public:
     }
   }
 
-  void mul_helper(CoeffTree& r, const CoeffTree& f, const CoeffTree& g, 
-                  const tensor_real& fsin, const tensor_real& gsin, int n, int l) {
+  Future<bool> mul_helper(CoeffTree& r, const CoeffTree& f, const CoeffTree& g, 
+                  const tensor_real& fsin, const tensor_real& gsin, const Key& key) {
+    Key keyl = key.left_child();
+    Key keyr = key.right_child();
     auto mrefine = true;
     auto fs = fsin;
     if (fs.size() == 0) {
-      const auto fp = f.find(Key(n,l)).get();
+      const auto fp = f.find(key).get();
       assert(fp != f.end());
       fs = fp->second.coeffs;
     }
     auto gs = gsin;
     if (gs.size() == 0) {
-      const auto gp = g.find(Key(n,l)).get();
+      const auto gp = g.find(key).get();
       assert(gp != g.end());
       gs = gp->second.coeffs;
     }
@@ -474,7 +476,7 @@ public:
         unpack(k, fss, fs0, fs1);
         unpack(k, gss, gs0, gs1);
         // convert to function values
-        auto scale = std::sqrt(std::pow(2.0, n+1));
+        auto scale = std::sqrt(std::pow(2.0, key.n+1));
         auto fs0vals = inner(quad_phi, fs0);
         auto fs1vals = inner(quad_phi, fs1);
         auto gs0vals = inner(quad_phi, gs0);
@@ -485,16 +487,18 @@ public:
         rs1 = inner(quad_phiwT, rs1);
         rs0 = rs0.scale(scale);
         rs1 = rs1.scale(scale);
-        r.replace(Key(n,l),Node(Key(n,l),tensor_real()));
-        r.replace(Key(n+1,2*l),Node(Key(n+1,2*l),rs0));
-        r.replace(Key(n+1,2*l+1),Node(Key(n+1,2*l+1),rs1));
+        r.replace(key,Node(key,tensor_real()));
+        r.replace(keyl,Node(keyl,rs0));
+        r.replace(keyr,Node(keyr,rs1));
+        return Future<bool>(true);
       } else {
         // do multiply --- DOESN'T WORK!!! (me dumb)
       }
     } else {
-      r.replace(Key(n,l),Node(Key(n,l),tensor_real()));
-      mul_helper(r, f, g, fs, gs, n+1, 2*l);
-      mul_helper(r, f, g, fs, gs, n+1, 2*l+1);
+      r.replace(key,Node(key,tensor_real()));
+      Future<bool> f_left  = woT::task(stree.owner(keyl), &Function1D::mul_helper, r, f, g, fs, gs, keyl);
+      Future<bool> f_right = woT::task(stree.owner(keyr), &Function1D::mul_helper, r, f, g, fs, gs, keyr);
+      return world.taskq.add(reduction_tree<bool,And<bool> >, f_left, f_right);
     }
   }
 
@@ -502,7 +506,8 @@ public:
     Function1D r(world, g.k, g.thresh, g.maxlevel, g.initiallevel);
     assert(is_reconstructed());
     assert(g.is_reconstructed());
-    r.mul_helper(r.stree, stree, g.stree, tensor_real(), tensor_real(), 0, 0); 
+    Key root(0,0);
+    auto done = g.task(r.stree.owner(root), &Function1D::mul_helper, r.stree, stree, g.stree, tensor_real(), tensor_real(), root).get(); 
     r.form = Function1D::FunctionForm::RECONSTRUCTED;
     return r;
   }
